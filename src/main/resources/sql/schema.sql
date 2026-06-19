@@ -30,12 +30,14 @@ CREATE TABLE t_order (
     pay_time DATETIME DEFAULT NULL COMMENT '支付时间',
     create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
     deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除 0-未删除 1-已删除',
     PRIMARY KEY (id),
     UNIQUE KEY uk_order_no (order_no),
     KEY idx_user_id (user_id),
     KEY idx_product_id (product_id),
-    KEY idx_status (status)
+    KEY idx_status (status),
+    KEY idx_status_create_time (status, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单表';
 
 DROP TABLE IF EXISTS t_inventory_log;

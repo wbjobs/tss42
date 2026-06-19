@@ -14,17 +14,23 @@ import com.example.orderinventory.mq.OrderMessageProducer;
 import com.example.orderinventory.service.InventoryService;
 import com.example.orderinventory.service.OrderService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Slf4j
 @Service
 public class OrderServiceImpl implements OrderService {
+
+    @Value("${order.timeout:900}")
+    private int orderTimeoutSeconds;
 
     @Resource
     private OrderMapper orderMapper;
@@ -57,6 +63,7 @@ public class OrderServiceImpl implements OrderService {
             order.setStatus(OrderStatusEnum.PENDING_PAY.getCode());
             order.setCreateTime(LocalDateTime.now());
             order.setUpdateTime(LocalDateTime.now());
+            order.setVersion(0);
             orderMapper.insert(order);
 
             InventoryLog inventoryLog = new InventoryLog();
@@ -122,12 +129,13 @@ public class OrderServiceImpl implements OrderService {
             return true;
         }
 
-        UpdateWrapper<Order> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("id", orderId)
-                .eq("status", OrderStatusEnum.PENDING_PAY.getCode())
-                .set("status", OrderStatusEnum.CANCELLED.getCode())
-                .set("update_time", LocalDateTime.now());
-        int updateCount = orderMapper.update(null, updateWrapper);
+        int updateCount = orderMapper.updateStatusWithVersion(
+                order.getId(),
+                OrderStatusEnum.PENDING_PAY.getCode(),
+                OrderStatusEnum.CANCELLED.getCode(),
+                order.getVersion(),
+                LocalDateTime.now()
+        );
 
         if (updateCount > 0) {
             boolean rollbackResult = inventoryService.rollbackInventory(
@@ -144,31 +152,51 @@ public class OrderServiceImpl implements OrderService {
             }
             log.info("订单取消成功, orderId: {}", orderId);
             return true;
+        } else {
+            log.warn("订单取消失败，版本号不匹配或状态已变更, orderId: {}", orderId);
+            return false;
         }
+    }
 
-        return false;
+    @Override
+    @Deprecated
+    @Transactional(rollbackFor = Exception.class)
+    public boolean timeoutCancelOrder(String orderNo) {
+        return safeTimeoutCancelOrder(orderNo);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean timeoutCancelOrder(String orderNo) {
-        Order order = getOrderByOrderNo(orderNo);
+    public boolean safeTimeoutCancelOrder(String orderNo) {
+        Order order = orderMapper.selectByOrderNoForUpdate(orderNo);
         if (order == null) {
-            log.warn("订单不存在, orderNo: {}", orderNo);
+            log.warn("[safeTimeoutCancelOrder] 订单不存在, orderNo: {}", orderNo);
             return true;
         }
+
+        log.info("[safeTimeoutCancelOrder] 二次校验订单状态, orderNo: {}, status: {}, version: {}, createTime: {}",
+                orderNo, order.getStatus(), order.getVersion(), order.getCreateTime());
 
         if (!OrderStatusEnum.PENDING_PAY.getCode().equals(order.getStatus())) {
-            log.info("订单已支付或已取消，无需超时取消, orderNo: {}, status: {}", orderNo, order.getStatus());
+            log.info("[safeTimeoutCancelOrder] 订单已支付或已取消，无需超时回滚, orderNo: {}, status: {}",
+                    orderNo, order.getStatus());
             return true;
         }
 
-        UpdateWrapper<Order> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("order_no", orderNo)
-                .eq("status", OrderStatusEnum.PENDING_PAY.getCode())
-                .set("status", OrderStatusEnum.TIMEOUT_CANCELLED.getCode())
-                .set("update_time", LocalDateTime.now());
-        int updateCount = orderMapper.update(null, updateWrapper);
+        LocalDateTime expireTime = order.getCreateTime().plusSeconds(orderTimeoutSeconds);
+        if (LocalDateTime.now().isBefore(expireTime)) {
+            log.warn("[safeTimeoutCancelOrder] 订单未超时，暂不回滚, orderNo: {}, createTime: {}, expireTime: {}",
+                    orderNo, order.getCreateTime(), expireTime);
+            return false;
+        }
+
+        int updateCount = orderMapper.updateStatusWithVersion(
+                order.getId(),
+                OrderStatusEnum.PENDING_PAY.getCode(),
+                OrderStatusEnum.TIMEOUT_CANCELLED.getCode(),
+                order.getVersion(),
+                LocalDateTime.now()
+        );
 
         if (updateCount > 0) {
             boolean rollbackResult = inventoryService.rollbackInventory(
@@ -183,17 +211,24 @@ public class OrderServiceImpl implements OrderService {
                 inventoryLog.setCreateTime(LocalDateTime.now());
                 inventoryService.addInventoryLog(inventoryLog);
             }
-            log.info("订单超时取消成功, orderNo: {}", orderNo);
+            log.info("[safeTimeoutCancelOrder] 订单超时取消成功, orderNo: {}, version: {}",
+                    orderNo, order.getVersion());
             return true;
+        } else {
+            Order latestOrder = orderMapper.selectByOrderNoDirect(orderNo);
+            log.warn("[safeTimeoutCancelOrder] 订单取消失败，版本号不匹配或状态已变更, " +
+                            "orderNo: {}, expectVersion: {}, currentStatus: {}, currentVersion: {}",
+                    orderNo, order.getVersion(),
+                    latestOrder != null ? latestOrder.getStatus() : null,
+                    latestOrder != null ? latestOrder.getVersion() : null);
+            return false;
         }
-
-        return false;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean confirmPayOrder(String orderNo) {
-        Order order = getOrderByOrderNo(orderNo);
+        Order order = orderMapper.selectByOrderNoForUpdate(orderNo);
         if (order == null) {
             throw new RuntimeException("订单不存在");
         }
@@ -208,13 +243,13 @@ public class OrderServiceImpl implements OrderService {
             return false;
         }
 
-        UpdateWrapper<Order> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.eq("order_no", orderNo)
-                .eq("status", OrderStatusEnum.PENDING_PAY.getCode())
-                .set("status", OrderStatusEnum.PAID.getCode())
-                .set("pay_time", LocalDateTime.now())
-                .set("update_time", LocalDateTime.now());
-        int updateCount = orderMapper.update(null, updateWrapper);
+        int updateCount = orderMapper.updateStatusWithVersion(
+                order.getId(),
+                OrderStatusEnum.PENDING_PAY.getCode(),
+                OrderStatusEnum.PAID.getCode(),
+                order.getVersion(),
+                LocalDateTime.now()
+        );
 
         if (updateCount > 0) {
             boolean confirmResult = inventoryService.confirmSale(
@@ -229,11 +264,16 @@ public class OrderServiceImpl implements OrderService {
                 inventoryLog.setCreateTime(LocalDateTime.now());
                 inventoryService.addInventoryLog(inventoryLog);
             }
-            log.info("订单支付确认成功, orderNo: {}", orderNo);
+            log.info("订单支付确认成功, orderNo: {}, version: {}", orderNo, order.getVersion());
             return true;
+        } else {
+            Order latestOrder = orderMapper.selectByOrderNoDirect(orderNo);
+            log.warn("订单支付确认失败，版本号不匹配, orderNo: {}, expectVersion: {}, currentVersion: {}, currentStatus: {}",
+                    orderNo, order.getVersion(),
+                    latestOrder != null ? latestOrder.getVersion() : null,
+                    latestOrder != null ? latestOrder.getStatus() : null);
+            return false;
         }
-
-        return false;
     }
 
     @Override
@@ -246,6 +286,22 @@ public class OrderServiceImpl implements OrderService {
         QueryWrapper<Order> wrapper = new QueryWrapper<>();
         wrapper.eq("order_no", orderNo);
         return orderMapper.selectOne(wrapper);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Order getOrderByOrderNoDirectFromDb(String orderNo) {
+        return orderMapper.selectByOrderNoDirect(orderNo);
+    }
+
+    @Override
+    public List<Order> listTimeoutPendingOrders(int timeoutSeconds, int limit) {
+        LocalDateTime beforeTime = LocalDateTime.now().minusSeconds(timeoutSeconds);
+        return orderMapper.selectTimeoutPendingOrders(
+                OrderStatusEnum.PENDING_PAY.getCode(),
+                beforeTime,
+                limit
+        );
     }
 
     private String generateOrderNo() {
