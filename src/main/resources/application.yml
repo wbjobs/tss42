@@ -53,6 +53,23 @@ mybatis-plus:
 
 order:
   timeout: 900
+  high-risk-timeout: 300
+  risk-threshold: 60
+
+elasticsearch:
+  host: localhost
+  port: 9200
+  scheme: http
+  username:
+  password:
+  index:
+    inventory-change: inventory_change_log
+
+spring:
+  elasticsearch:
+    uris: http://localhost:9200
+    username:
+    password:
 
 xxl:
   job:

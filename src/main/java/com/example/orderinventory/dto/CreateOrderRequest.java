@@ -20,4 +20,8 @@ public class CreateOrderRequest implements Serializable {
     @NotNull(message = "购买数量不能为空")
     @Min(value = 1, message = "购买数量不能小于1")
     private Integer quantity;
+
+    private String ip;
+
+    private String deviceFingerprint;
 }

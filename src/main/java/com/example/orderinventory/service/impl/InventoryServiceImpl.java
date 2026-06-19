@@ -56,6 +56,11 @@ public class InventoryServiceImpl implements InventoryService {
 
     @Override
     public boolean deductInventory(Long productId, Integer quantity, String orderNo) {
+        return deductInventory(productId, quantity, orderNo, 900);
+    }
+
+    @Override
+    public boolean deductInventory(Long productId, Integer quantity, String orderNo, int expireSeconds) {
         String stockKey = STOCK_KEY_PREFIX + productId;
         String reserveKey = RESERVE_KEY_PREFIX + orderNo;
 
@@ -65,7 +70,7 @@ public class InventoryServiceImpl implements InventoryService {
         Long result = stringRedisTemplate.execute(deductScript, keys,
                 String.valueOf(quantity),
                 orderNo,
-                String.valueOf(900));
+                String.valueOf(expireSeconds));
 
         if (result == null) {
             log.error("扣减库存Lua脚本执行失败, productId: {}, orderNo: {}", productId, orderNo);
@@ -73,7 +78,8 @@ public class InventoryServiceImpl implements InventoryService {
         }
 
         if (result == 1) {
-            log.info("扣减库存成功, productId: {}, quantity: {}, orderNo: {}", productId, quantity, orderNo);
+            log.info("扣减库存成功, productId: {}, quantity: {}, orderNo: {}, expire: {}s",
+                    productId, quantity, orderNo, expireSeconds);
             return true;
         } else if (result == 0) {
             log.warn("库存不足, productId: {}, quantity: {}, orderNo: {}", productId, quantity, orderNo);
@@ -135,6 +141,14 @@ public class InventoryServiceImpl implements InventoryService {
             return true;
         }
         return false;
+    }
+
+    @Override
+    public boolean manualReleaseInventory(Long productId, Integer quantity, String orderNo,
+                                          String operatorNo, String operatorName) {
+        log.info("[手动释放库存] operator: {}({}), orderNo: {}, productId: {}, quantity: {}",
+                operatorNo, operatorName, orderNo, productId, quantity);
+        return rollbackInventory(productId, quantity, orderNo);
     }
 
     @Override

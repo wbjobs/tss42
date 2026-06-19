@@ -4,50 +4,39 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.annotation.Version;
 import lombok.Data;
 
 import java.io.Serializable;
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
-@TableName("t_order")
-public class Order implements Serializable {
+@TableName("t_operator_log")
+public class OperatorLog implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    private String operatorNo;
+
+    private String operatorName;
+
+    private String operationType;
+
     private String orderNo;
 
-    private Long userId;
+    private String productId;
 
-    private Long productId;
+    private String beforeData;
 
-    private Integer quantity;
+    private String afterData;
 
-    private BigDecimal totalAmount;
-
-    private Integer status;
-
-    private Integer riskFlag;
-
-    private Integer riskScore;
+    private String remark;
 
     private String ip;
 
-    private String deviceFingerprint;
-
-    private LocalDateTime payTime;
-
     private LocalDateTime createTime;
-
-    private LocalDateTime updateTime;
-
-    @Version
-    private Integer version;
 
     @TableLogic
     private Integer deleted;

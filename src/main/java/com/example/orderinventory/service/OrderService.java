@@ -20,6 +20,8 @@ public interface OrderService {
 
     boolean confirmPayOrder(String orderNo);
 
+    boolean manualReleaseOrder(String orderNo, String operatorNo, String operatorName, String ip);
+
     Order getOrderById(Long orderId);
 
     Order getOrderByOrderNo(String orderNo);
